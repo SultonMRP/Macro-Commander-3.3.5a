@@ -1,0 +1,6 @@
+<Bindings>
+    <!-- Removed runOnUp parameter to ensure the bar toggles cleanly on a single click -->
+    <Binding name="MC_TOGGLE_BAR" header="MC_HEADER">
+        if SlashCmdList and SlashCmdList["MACROC"] then SlashCmdList["MACROC"]("toggle") end
+    </Binding>
+</Bindings>
