@@ -1,4 +1,3 @@
---start of MacroCommander.lua (Box 1 of 14)
 -- ==========================================
 -- NOTE: \031 is the ASCII Unit Separator.
 -- It replaces spaces in macro names safely.
@@ -8,29 +7,30 @@
 local MainFrame, ConfigFrame
 local textWidthFrame = CreateFrame("Frame")
 local textWidthTester = textWidthFrame
-    :CreateFontString(nil, "BACKGROUND", 
+    :CreateFontString(nil, "BACKGROUND",
     "GameFontNormal")
 
-_G["BINDING_HEADER_MC_HEADER"] = 
+_G["BINDING_HEADER_MC_HEADER"] =
     "|cFFFFFFFFMacro Commander|r"
-_G["BINDING_NAME_MC_TOGGLE_BAR"] = 
+_G["BINDING_NAME_MC_TOGGLE_BAR"] =
     "|cFF00FF00Toggle Main Bar Visibility|r"
 
 local MC = LibStub("AceAddon-3.0")
-    :NewAddon("MacroCommander", 
+    :NewAddon("MacroCommander",
     "AceConsole-3.0")
 
 local L = {
     Skin = {
-        bgFile = "Interface\\DialogFrame\\"
-            .. "UI-DialogBox-Background",
-        edgeFile = "Interface\\DialogFrame\\"
-            .. "UI-DialogBox-Border",
-        tile = true, tileSize = 32, 
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32,
         edgeSize = 16,
-        insets = { left = 4, right = 4, 
+    insets = { left = 4, right = 4,
             top = 4, bottom = 4 }
-    }
+    }, -- End of Skin
+    ["Buttons per column:"] = "Buttons per column:",
+    ["MC: Buttons per column must be a number greater than or equal to 1."] = "MC: Buttons per column must be a number greater than or equal to 1.",
+    ["MC: Buttons per column cannot exceed 50."] = "MC: Buttons per column cannot exceed 50.",
 }
 
 local function GetDefaultDB()
@@ -44,15 +44,15 @@ local function GetDefaultDB()
             scale = 1.0,
             locked = false,
             visible = true,
+            maxColumns = 10, -- New: Maximum buttons per vertical column, defaults to 10
             buttons = {
-                { name = "Default", 
+                { name = "Default",
                   macro = "Macro" }
             }
         }
     }
 end
---end of MacroCommander.lua (Box 1 of 14)
---start of MacroCommander.lua (Box 2 of 14)
+
 -- ==========================================
 -- Reset layout positions back to coordinate
 -- midpoints on the monitor layout.
@@ -64,133 +64,256 @@ local function ResetWindowPositions()
     db.main_pct_y = 0.5
     db.config_x = 100
     db.config_y = 0
-    
-    local sW, sH = UIParent:GetWidth(), 
+
+    local sW, sH = UIParent:GetWidth(),
         UIParent:GetHeight()
     local scale = MainFrame:GetScale() or 1.0
     MainFrame:ClearAllPoints()
-    MainFrame:SetPoint("CENTER", UIParent, 
-        "BOTTOMLEFT", 
-        (sW * db.main_pct_x) / scale, 
+    MainFrame:SetPoint("CENTER", UIParent,
+        "BOTTOMLEFT",
+        (sW * db.main_pct_x) / scale,
         (sH * db.main_pct_y) / scale)
-    
+
     if ConfigFrame then
         ConfigFrame:ClearAllPoints()
-        ConfigFrame:SetPoint("CENTER", 
-            UIParent, "CENTER", 
+        ConfigFrame:SetPoint("CENTER",
+            UIParent, "CENTER",
             db.config_x, db.config_y)
     end
     print("|cFF00FF00MC: Positions reset"
         .. " to center virtual anchor.|r")
 end
 
+-- /cast and named /use in the slash box cannot use macrotext.
+-- AethroSanctuary replaces GetItemInfo; Blizzard CAST calls it and blocks.
+-- type=spell / type=item never call GetItemInfo.
+local function ParseSecureSlash(text)
+    if type(text) ~= "string" then
+        return
+    end
+    text = strtrim(text)
+    if text == "" or string.find(text, "\n") then
+        return
+    end
+    local cmd, rest = string.match(text,
+        "^/(%S+)%s+(.-)%s*$")
+    if not cmd or not rest or rest == "" then
+        return
+    end
+    cmd = string.lower(cmd)
+    if cmd == "acast" or cmd == "aspell" then
+        cmd = "cast"
+    elseif cmd == "ause" then
+        cmd = "use"
+    end
+    if cmd ~= "cast" and cmd ~= "use"
+        and cmd ~= "spell" then
+        return
+    end
+    if string.find(rest, ";") then
+        return
+    end
+    local unit
+    local cond, body = string.match(rest,
+        "^%[(.-)%]%s*(.*)$")
+    if cond then
+        rest = strtrim(body or "")
+        if rest == "" or string.find(cond, ",") then
+            return
+        end
+        unit = string.match(cond, "^@(.+)$")
+            or string.match(cond, "^[Tt]arget=(.+)$")
+        if not unit then
+            return
+        end
+    end
+    rest = string.gsub(rest, "^!+", "")
+    rest = strtrim(rest)
+    if rest == "" then
+        return
+    end
+    if cmd == "cast" or cmd == "spell" then
+        return { kind = "spell",
+            spell = rest, unit = unit }
+    end
+    if string.match(rest, "^%d+$")
+        or string.match(rest, "^%d+%s+%d+$") then
+        return
+    end
+    return { kind = "item",
+        item = rest, unit = unit }
+end
+
+local function IsDirectChatCommand(text)
+    if type(text) ~= "string" then
+        return false
+    end
+    local first = string.sub(strtrim(text), 1, 1)
+    return first == "/" or first == "."
+end
+
+local function ApplyButtonMacro(btn, activeMacro)
+    btn:SetAttribute("spell", nil)
+    btn:SetAttribute("item", nil)
+    btn:SetAttribute("unit", nil)
+    local parsed = ParseSecureSlash(activeMacro)
+    if parsed then
+        btn:SetAttribute("macro", nil)
+        btn:SetAttribute("macrotext", nil)
+        btn:SetAttribute("type", parsed.kind)
+        if parsed.kind == "spell" then
+            btn:SetAttribute("spell", parsed.spell)
+        else
+            btn:SetAttribute("item", parsed.item)
+        end
+        if parsed.unit then
+            btn:SetAttribute("unit", parsed.unit)
+        end
+        return
+    end
+    btn:SetAttribute("type", "macro")
+    if IsDirectChatCommand(activeMacro) then
+        btn:SetAttribute("macro", nil)
+        btn:SetAttribute("macrotext", activeMacro)
+    else
+        btn:SetAttribute("macrotext", nil)
+        btn:SetAttribute("macro", activeMacro)
+    end
+end
+
 function MC:RefreshUI()
     if InCombatLockdown() then return end
-    
+
     -- Sync current data layout references with the active profile variables space
     local db = self.db.profile
-    
+
     MainFrame:SetAlpha(db.alpha or 1.0)
     MainFrame:SetScale(db.scale or 1.0)
---end of MacroCommander.lua (Box 2 of 14)
---start of MacroCommander.lua (Box 3 of 14)
+    MainFrame:SetMovable(not db.locked)
+
 -- ==========================================
 -- Rebuild interface canvas framework and
 -- calculate longest text width parameters.
 -- ==========================================
 
-    local db = self.db.profile
     MainFrame:SetBackdrop(L.Skin)
     MainFrame:SetBackdropColor(1, 1, 1, 1)
-    if ConfigFrame then 
-        ConfigFrame:SetBackdrop(L.Skin) 
-        ConfigFrame:SetBackdropColor(1, 1, 
+    if ConfigFrame then
+        ConfigFrame:SetBackdrop(L.Skin)
+        ConfigFrame:SetBackdropColor(1, 1,
             1, 1)
     end
-    
-    local maxTextWidth = 70 
+
+    local maxTextWidth = 70
     for idx, btnData in ipairs(db.buttons) do
-        if not btnData.name or 
-            btnData.name == "" or 
+        if not btnData.name or
+            btnData.name == "" or
             btnData.name == " " then
-            btnData.name = 
+            btnData.name =
                 "[Error: Bad Name]"
         end
         textWidthTester:SetText(btnData.name)
         local w = textWidthTester
             :GetStringWidth()
-        if w > maxTextWidth then 
-            maxTextWidth = w 
+        if w > maxTextWidth then
+            maxTextWidth = w
         end
     end
     local finalWidth = maxTextWidth + 24
-    MainFrame:SetWidth(finalWidth)
+    -- MainFrame:SetWidth(finalWidth) -- This was moved down for dynamic column width calculation
 
     if MainFrame.buttons then
-        for _, oldBtn in 
-            ipairs(MainFrame.buttons) do 
-            oldBtn:Hide() 
+        for _, oldBtn in
+            ipairs(MainFrame.buttons) do
+            oldBtn:Hide()
         end
     end
     MainFrame.buttons = {}
-    local totalHeight = 28
---end of MacroCommander.lua (Box 3 of 14)
---start of MacroCommander.lua (Box 4 of 14)
+    -- local totalHeight = 28 -- This is now calculated dynamically
+
 -- ==========================================
 -- Populate active custom macro layout row
 -- buttons into secure environment frames.
 -- ==========================================
 
-    local db = self.db.profile
+    local numButtons = #db.buttons
+    local maxCols = db.maxColumns or 10 -- Get max columns, default to 10
+    local numCols = math.ceil(numButtons / maxCols) -- Calculate number of columns
+    local buttonWidth = finalWidth - 10
+
+    -- If there are no buttons, set numCols to 0 or 1 to avoid division by zero or incorrect width
+    if numButtons == 0 then
+        numCols = 1 -- Minimum one column for title to show
+        buttonWidth = finalWidth - 10
+    end
+
+    if MainFrame.buttons then
+        for _, oldBtn in
+            ipairs(MainFrame.buttons) do
+            oldBtn:Hide()
+        end
+    end
+    MainFrame.buttons = {}
+    local columnWidth = buttonWidth + 10 -- Width of a button plus some padding
+    local totalContentWidth = numCols * columnWidth
+    MainFrame:SetWidth(totalContentWidth)
+
+    -- Recalculate title position after setting new width
+    if MainFrame.Title then
+        MainFrame.Title:ClearAllPoints()
+        MainFrame.Title:SetPoint("TOP", MainFrame, "TOP", 0, -6)
+    end
+
     for i, btnData in ipairs(db.buttons) do
-        local btn = CreateFrame("Button", 
-            "MC_ActionBarBtn" .. i, 
-            MainFrame, 
+        local columnIdx = math.floor((i - 1) / maxCols)
+        local rowIdx = (i - 1) % maxCols
+
+        local btn = CreateFrame("Button",
+            "MC_ActionBarBtn" .. i,
+            MainFrame,
             "SecureActionButtonTemplate,"
             .. "UIPanelButtonTemplate")
-        btn:SetSize(finalWidth - 10, 
+        btn:SetSize(buttonWidth,
             db.buttonHeight)
-        btn:SetPoint("TOP", MainFrame, 
-            "TOP", 0, -18 - ((i - 1) * 
-            db.buttonHeight))
+        btn:SetPoint("TOPLEFT", MainFrame,
+            "TOPLEFT",
+            (columnIdx * columnWidth) + 5,
+            -18 - (rowIdx * db.buttonHeight))
         btn:SetText(btnData.name)
-        
+
         local normalText = btn:GetFontString()
-        if normalText then 
-            normalText:SetTextColor(0.85, 
-                0.85, 0.85) 
+        if normalText then
+            normalText:SetTextColor(0.85,
+                0.85, 0.85)
         end
-        
+
         local activeMacro = string.gsub(
-            btnData.macro or "Macro", 
-            "\031", " ")
-        btn:SetAttribute("type", "macro")
-        btn:SetAttribute("macro", 
-            activeMacro)
-        
+            btnData.macro or "Macro",
+            "\\031", " ")
+        ApplyButtonMacro(btn, activeMacro)
+
         table.insert(MainFrame.buttons, btn)
-        totalHeight = totalHeight + 
-            db.buttonHeight
     end
+    local effectiveRows = (numButtons == 0) and 0 or ((numButtons <= maxCols) and numButtons or maxCols)
+    local totalHeight = (effectiveRows * db.buttonHeight) + 28
     MainFrame:SetHeight(totalHeight)
-    
-    local sW, sH = UIParent:GetWidth(), 
+
+    local sW, sH = UIParent:GetWidth(),
         UIParent:GetHeight()
     local scale = MainFrame:GetScale() or 1.0
     MainFrame:ClearAllPoints()
-    MainFrame:SetPoint("CENTER", UIParent, 
-        "BOTTOMLEFT", 
-        (sW * db.main_pct_x) / scale, 
+    MainFrame:SetPoint("CENTER", UIParent,
+        "BOTTOMLEFT",
+        (sW * db.main_pct_x) / scale,
         (sH * db.main_pct_y) / scale)
-    
-    if db.visible then 
-        MainFrame:Show() 
-    else 
-        MainFrame:Hide() 
+
+    if db.visible then
+        MainFrame:Show()
+    else
+        MainFrame:Hide()
     end
 end
---end of MacroCommander.lua (Box 4 of 14)
---start of MacroCommander.lua (Box 5 of 14)
+
 -- ==========================================
 -- Finish window placement recalculations and
 -- construct configuration base backdrop.
@@ -199,22 +322,21 @@ end
 local function CreateConfigFrame(
     refreshCallback)
     local db = MC.db.profile
-    local statusText
-    local UpdateUnsavedStatus
-    local CaptureCommitted
+    local selectedIndex = 1
     local committed = {}
-    local cfg = CreateFrame("Frame", 
+
+    -- Main config frame
+    local cfg = CreateFrame("Frame",
         "MC_ConfigFrame", UIParent)
-    cfg:SetSize(320, 410) 
-    cfg:SetPoint("CENTER", UIParent, 
+    cfg:SetSize(320, 405)
+    cfg:SetPoint("CENTER", UIParent,
         "CENTER", db.config_x, db.config_y)
-    
     cfg:SetMovable(true)
     cfg:EnableMouse(true)
     cfg:RegisterForDrag("LeftButton")
-    cfg:SetScript("OnDragStart", 
+    cfg:SetScript("OnDragStart",
         cfg.StartMoving)
-    cfg:SetScript("OnDragStop", 
+    cfg:SetScript("OnDragStop",
         function(self)
         self:StopMovingOrSizing()
         local _, _, _, x, y = self:GetPoint()
@@ -222,24 +344,18 @@ local function CreateConfigFrame(
         MC.db.profile.config_y = y
     end)
     cfg:Hide()
+    cfg:SetBackdrop(L.Skin)
+    cfg:SetBackdropColor(1, 1, 1, 1)
 
-    local title = cfg:CreateFontString(nil, 
+    -- Title
+    local title = cfg:CreateFontString(nil,
         "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", cfg, "TOP", 0, 
+    title:SetPoint("TOP", cfg, "TOP", 0,
         -12)
     title:SetText("MC Configurations")
     title:SetTextColor(1.0, 0.82, 0.0)
---end of MacroCommander.lua (Box 5 of 14)
---start of MacroCommander.lua (Box 6 of 14)
--- ==========================================
--- Setup mouse motion frame tracking anchors
--- and draw initial large configuration titles.
--- ==========================================
 
-    local selectedIndex = 1
-    
-    -- Up/down sit in the droplist's empty left padding. The 2px
-    -- gap between them is centered on the droplist midline.
+    -- Up/down buttons
     local upBtn = CreateFrame("Button", nil, cfg, "UIPanelButtonTemplate")
     upBtn:SetSize(16, 16)
     upBtn:SetText("^")
@@ -249,49 +365,251 @@ local function CreateConfigFrame(
     downBtn:SetPoint("TOPLEFT", upBtn, "BOTTOMLEFT", 0, -2)
     downBtn:SetText("v")
 
-    local dropdown = CreateFrame("Frame", 
-        "MC_ButtonDropdown", cfg, 
+    -- Dropdown for buttons
+    local dropdown = CreateFrame("Frame",
+        "MC_ButtonDropdown", cfg,
         "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOPLEFT", cfg, 
+    dropdown:SetPoint("TOPLEFT", cfg,
         "TOPLEFT", 10, -42)
     UIDropDownMenu_SetWidth(dropdown, 130)
-    upBtn:SetPoint("RIGHT", dropdown, 
+    upBtn:SetPoint("RIGHT", dropdown,
         "LEFT", 16, 9)
 
-    local renameBox = CreateFrame("EditBox", 
-        "MC_RenameBox", cfg, 
+    -- Rename box
+    local renameBox = CreateFrame("EditBox",
+        "MC_RenameBox", cfg,
         "InputBoxTemplate")
     renameBox:SetSize(108, 20)
-    renameBox:SetPoint("LEFT", dropdown, 
+    renameBox:SetPoint("LEFT", dropdown,
         "RIGHT", -6, 2)
     renameBox:SetAutoFocus(false)
-    renameBox:SetScript("OnEnterPressed", 
-        function(self) self:ClearFocus() 
+    renameBox:SetScript("OnEnterPressed",
+        function(self) self:ClearFocus()
     end)
---end of MacroCommander.lua (Box 6 of 14)
---start of MacroCommander.lua (Box 7 of 14)
--- ==========================================
--- Create contextual update triggers when dropdown
--- list selection values shift targets.
--- ==========================================
 
+    -- Macro name label and input box
     local macroNameLabel = cfg
-        :CreateFontString(nil, "OVERLAY", 
+        :CreateFontString(nil, "OVERLAY",
         "GameFontHighlightSmall")
     macroNameLabel:SetText("Macro name")
 
     local macroInputBox = CreateFrame(
-        "EditBox", "MC_MacroInputBox", cfg, 
+        "EditBox", "MC_MacroInputBox", cfg,
         "InputBoxTemplate")
-    macroInputBox:SetSize(110, 20) 
-    macroInputBox:SetPoint("LEFT", 
+    macroInputBox:SetSize(110, 20)
+    macroInputBox:SetPoint("LEFT",
         macroNameLabel, "RIGHT", 8, -1)
     macroInputBox:SetAutoFocus(false)
     macroInputBox:SetScript(
-        "OnEnterPressed", function(self) 
-        self:ClearFocus() 
+        "OnEnterPressed", function(self)
+        self:ClearFocus()
     end)
 
+    -- Add/Remove buttons
+    local addBtn = CreateFrame("Button",
+        nil, cfg, "UIPanelButtonTemplate")
+    addBtn:SetSize(20, 20)
+    addBtn:SetPoint("TOPLEFT", downBtn,
+        "BOTTOMLEFT", 0, -6)
+    addBtn:SetText("+")
+
+    local remBtn = CreateFrame("Button",
+        nil, cfg, "UIPanelButtonTemplate")
+    remBtn:SetSize(20, 20)
+    remBtn:SetPoint("LEFT", addBtn,
+        "RIGHT", 4, 0)
+    remBtn:SetText("-")
+    macroInputBox:ClearAllPoints()
+    macroInputBox:SetSize(108, 20)
+    macroInputBox:SetPoint("TOPLEFT",
+        renameBox, "BOTTOMLEFT", 0, -14)
+    macroNameLabel:ClearAllPoints()
+    macroNameLabel:SetPoint("LEFT", remBtn,
+        "RIGHT", 6, 0)
+    macroNameLabel:SetPoint("RIGHT",
+        macroInputBox, "LEFT", -6, 0)
+    macroNameLabel:SetJustifyH("LEFT")
+
+
+    -- Height Slider
+    local hSlider = CreateFrame("Slider",
+        "MC_HeightSlider", cfg,
+        "OptionsSliderTemplate")
+    hSlider:SetPoint("TOPLEFT", addBtn,
+        "BOTTOMLEFT", 0, -22)
+    hSlider:SetMinMaxValues(10, 50)
+    hSlider:SetValueStep(1)
+    hSlider:SetValue(db.buttonHeight)
+    _G[hSlider:GetName() .. "Text"]
+        :SetText("Button Height: "
+        .. db.buttonHeight)
+    _G[hSlider:GetName() .. "Low"]
+        :SetText("10")
+    _G[hSlider:GetName() .. "High"]
+        :SetText("50")
+
+    -- Alpha Slider
+    local aSlider = CreateFrame("Slider",
+        "MC_AlphaSlider", cfg,
+        "OptionsSliderTemplate")
+    aSlider:SetPoint("TOPLEFT", hSlider,
+        "BOTTOMLEFT", 0, -25)
+    aSlider:SetMinMaxValues(0.1, 1.0)
+    aSlider:SetValueStep(0.05)
+    aSlider:SetValue(db.alpha or 1.0)
+    _G[aSlider:GetName() .. "Text"]
+        :SetText("Bar Opacity: "
+        .. string.format("%.2f", db.alpha or 1.0))
+    _G[aSlider:GetName() .. "Low"]
+        :SetText("0.1")
+    _G[aSlider:GetName() .. "High"]
+        :SetText("1.0")
+
+    -- Scale input box
+    local scaleLabel = cfg
+        :CreateFontString(nil, "OVERLAY",
+        "GameFontNormalSmall")
+    scaleLabel:SetPoint("TOPLEFT", aSlider,
+        "BOTTOMLEFT", 0, -20)
+    scaleLabel:SetText("Button Window Scale %"
+        .. " (25 - 100):")
+
+    local scaleBox = CreateFrame("EditBox",
+        "MC_ScaleFieldBox", cfg,
+        "InputBoxTemplate")
+    scaleBox:SetSize(45, 20)
+    scaleBox:SetPoint("LEFT", scaleLabel,
+        "RIGHT", 10, 0)
+    scaleBox:SetMaxLetters(3)
+    scaleBox:SetNumeric(true)
+    scaleBox:SetAutoFocus(false)
+    scaleBox:SetText(tostring(math.floor(
+        (db.scale or 1.0) * 100)))
+    scaleBox:SetScript("OnEnterPressed",
+        function(self) self:ClearFocus()
+    end)
+
+    -- Lock checkbox
+    local lockCheck = CreateFrame(
+        "CheckButton", "MC_LockCheck", cfg,
+        "UICheckButtonTemplate")
+    lockCheck:SetPoint("TOPLEFT",
+        scaleLabel, "BOTTOMLEFT", -4, -12)
+    lockCheck:SetChecked(db.locked)
+
+    local lockText = _G[lockCheck:GetName()
+        .. "Text"]
+    lockText:SetDrawLayer("OVERLAY")
+    lockText:SetText(
+        "Lock Main Window Position")
+
+    -- Max Columns setting
+    local maxColumnsLabel = cfg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    maxColumnsLabel:SetPoint("TOPLEFT", lockCheck, "BOTTOMLEFT", 4, -20)
+    maxColumnsLabel:SetText(L["Buttons per column:"])
+
+    local maxColumnsBox = CreateFrame("EditBox", "MC_MaxColumnsBox", cfg, "InputBoxTemplate")
+    maxColumnsBox:SetSize(45, 20)
+    maxColumnsBox:SetPoint("LEFT", maxColumnsLabel, "RIGHT", 10, 0)
+    maxColumnsBox:SetMaxLetters(2)
+    maxColumnsBox:SetNumeric(true)
+    maxColumnsBox:SetAutoFocus(false)
+    maxColumnsBox:SetText(tostring(db.maxColumns or 10))
+    maxColumnsBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+
+
+    -- Profile Management
+    local pLabel = cfg:CreateFontString(
+        nil, "OVERLAY", "GameFontNormalSmall")
+    pLabel:SetPoint("TOPLEFT", maxColumnsBox,
+        "BOTTOMLEFT", -100, -5)
+    pLabel:SetText("Profile Management")
+
+    local selectedProf = "Default"
+    local pDropdown = CreateFrame("Frame",
+        "MC_ProfileDropdown", cfg,
+        "UIDropDownMenuTemplate")
+    pDropdown:SetPoint("TOPLEFT", pLabel,
+        "BOTTOMLEFT", -8, -10)
+    UIDropDownMenu_SetWidth(pDropdown, 120)
+
+    local loadPBtn = CreateFrame("Button",
+        nil, cfg, "UIPanelButtonTemplate")
+    loadPBtn:SetSize(45, 20)
+    loadPBtn:SetPoint("LEFT", pDropdown,
+        "RIGHT", -10, 3)
+    loadPBtn:SetText("Load")
+
+    local delPBtn = CreateFrame("Button",
+        nil, cfg, "UIPanelButtonTemplate")
+    delPBtn:SetSize(45, 20)
+    delPBtn:SetPoint("LEFT", loadPBtn,
+        "RIGHT", 4, 0)
+    delPBtn:SetText("Del")
+
+    -- Status Text
+    local statusText = cfg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusText:SetPoint("BOTTOM", cfg, "BOTTOM", 0, 49)
+    statusText:SetText("")
+
+    -- Save and Close buttons
+    local saveBtn = CreateFrame("Button", nil, cfg, "UIPanelButtonTemplate")
+    saveBtn:SetSize(95, 22)
+    saveBtn:SetPoint("BOTTOMLEFT", cfg, "BOTTOM", -105, 23)
+    saveBtn:SetText("Save Changes")
+
+    local closeBtn = CreateFrame("Button", nil, cfg, "UIPanelButtonTemplate")
+    closeBtn:SetSize(95, 22)
+    closeBtn:SetPoint("BOTTOMLEFT", cfg, "BOTTOM", 10, 23)
+    closeBtn:SetText("Close")
+    closeBtn:SetScript("OnClick", function() statusText:SetText(""); cfg:Hide() end)
+
+    -- Static Popup Dialog for Delete Confirmation
+    StaticPopupDialogs[
+        "MC_CONFIRM_DELETE"] = {
+        text = "Are you sure you want to "
+            .. "delete this command button "
+            .. "selection reference template"
+            .. " configuration?",
+        button1 = "Yes", button2 = "No",
+        OnAccept = function()
+            if InCombatLockdown() then
+                return
+            end
+            local pDB = MC.db.profile
+            table.remove(pDB.buttons,
+                selectedIndex)
+            selectedIndex = 1
+            UIDropDownMenu_Initialize(
+                dropdown,
+                InitializeDropdown)
+            UIDropDownMenu_SetSelectedValue(
+                dropdown, 1)
+            _G[dropdown:GetName() .. "Text"]
+                :SetText(pDB.buttons and
+                pDB.buttons[selectedIndex]
+                .name or "Default")
+            if pDB.buttons and
+                pDB.buttons[
+                selectedIndex] then
+                renameBox:SetText(
+                    pDB.buttons[
+                    selectedIndex].name
+                    or "Default")
+                local activeMacro =
+                    string.gsub(pDB.buttons[
+                    selectedIndex].macro
+                    or "Macro", "\\031", " ")
+                macroInputBox:SetText(
+                    activeMacro)
+            end
+            refreshCallback()
+        end,
+        timeout = 0, whileDead = true,
+        hideOnEscape = true,
+    }
+
+    -- Functions that reference UI elements
     local function Dropdown_OnClick(self)
         selectedIndex = self.value
         local pDB = MC.db.profile
@@ -302,112 +620,62 @@ local function CreateConfigFrame(
             selectedIndex].name)
         renameBox:SetText(pDB.buttons[
             selectedIndex].name)
-        
+
         local activeMacro = string.gsub(
-            pDB.buttons[selectedIndex].macro 
-            or "Macro", "\031", " ")
+            pDB.buttons[selectedIndex].macro
+            or "Macro", "\\031", " ")
         macroInputBox:SetText(activeMacro)
     end
---end of MacroCommander.lua (Box 7 of 14)
---start of MacroCommander.lua (Box 8 of 14)
--- ==========================================
--- Draw primary data table array templates
--- when initializing control setups.
--- ==========================================
 
     local function InitializeDropdown()
-        local info = 
+        local info =
             UIDropDownMenu_CreateInfo()
         local pDB = MC.db.profile
         for i, btnData in ipairs(
             pDB.buttons) do
-            info.text = btnData.name or 
+            info.text = btnData.name or
                 "[Error: Bad Name]"
             info.value = i
             info.func = Dropdown_OnClick
-            info.checked = (i == 
+            info.checked = (i ==
                 selectedIndex)
             UIDropDownMenu_AddButton(info)
         end
     end
 
-    UIDropDownMenu_Initialize(dropdown, 
-        InitializeDropdown)
-    UIDropDownMenu_SetSelectedValue(
-        dropdown, 1)
-    _G[dropdown:GetName() .. "Text"]
-        :SetText(db.buttons and 
-        db.buttons[selectedIndex].name 
-        or "Default")
-    renameBox:SetText(db.buttons and 
-        db.buttons[selectedIndex].name 
-        or "Default")
---end of MacroCommander.lua (Box 8 of 14)
---start of MacroCommander.lua (Box 9 of 14)
--- ==========================================
--- Define reference record insertions for 
--- expanding custom control node layouts.
--- ==========================================
-
-    local initialMacro = string.gsub(
-        db.buttons and db.buttons[
-        selectedIndex].macro or "Macro", 
-        "\031", " ")
-    macroInputBox:SetText(initialMacro)
-
-    local addBtn = CreateFrame("Button", 
-        nil, cfg, "UIPanelButtonTemplate")
-    addBtn:SetSize(20, 20)
-    addBtn:SetPoint("TOPLEFT", downBtn, 
-        "BOTTOMLEFT", 0, -6)
-    addBtn:SetText("+")
-
-    addBtn:SetScript("OnClick", function()
-        if InCombatLockdown() then return end
-        local pDB = MC.db.profile
-        local nextID = #pDB.buttons + 1
-        table.insert(pDB.buttons, 
-            { name = "unnamed", 
-              macro = "Macro" })
-        selectedIndex = nextID
-        UIDropDownMenu_Initialize(dropdown, 
-            InitializeDropdown)
+    local function ProfDropdown_OnClick(self)
+        selectedProf = self.value
         UIDropDownMenu_SetSelectedValue(
-            dropdown, selectedIndex)
-        _G[dropdown:GetName() .. "Text"]
-            :SetText("unnamed")
-        renameBox:SetText("unnamed")
-        macroInputBox:SetText("Macro")
-        refreshCallback()
-    end)
---end of MacroCommander.lua (Box 9 of 14)
---start of MacroCommander.lua (Box 10 of 14)
--- ==========================================
--- Configure up and down button movements to
--- reorder action rows inside profile tables.
--- ==========================================
+            pDropdown, selectedProf)
+        _G[pDropdown:GetName() .. "Text"]
+            :SetText(selectedProf)
+    end
 
-    local remBtn = CreateFrame("Button", 
-        nil, cfg, "UIPanelButtonTemplate")
-    remBtn:SetSize(20, 20)
-    remBtn:SetPoint("LEFT", addBtn, 
-        "RIGHT", 4, 0)
-    remBtn:SetText("-")
-    macroInputBox:ClearAllPoints()
-    macroInputBox:SetSize(108, 20)
-    macroInputBox:SetPoint("TOPLEFT", 
-        renameBox, "BOTTOMLEFT", 0, -14)
-    macroNameLabel:ClearAllPoints()
-    macroNameLabel:SetPoint("LEFT", remBtn, 
-        "RIGHT", 6, 0)
-    macroNameLabel:SetPoint("RIGHT", 
-        macroInputBox, "LEFT", -6, 0)
-    macroNameLabel:SetJustifyH("LEFT")
+    local function InitProfDropdown()
+        local info =
+            UIDropDownMenu_CreateInfo()
+        local profiles = MC.db:GetProfiles()
+        local activeProfile = MC.db:GetCurrentProfile()
+
+        info.text = "Addon Factory Default"
+        info.value = "Addon Factory Default"
+        info.func = ProfDropdown_OnClick
+        info.checked = (selectedProf == "Addon Factory Default")
+        UIDropDownMenu_AddButton(info)
+
+        for _, pName in ipairs(profiles) do
+            info.text = pName
+            info.value = pName
+            info.func = ProfDropdown_OnClick
+            info.checked = (pName == activeProfile)
+            UIDropDownMenu_AddButton(info)
+        end
+    end
 
     local function RefreshSelectionEditor()
         local pDB = MC.db.profile
         local btn = pDB.buttons[selectedIndex]
-        UIDropDownMenu_Initialize(dropdown, 
+        UIDropDownMenu_Initialize(dropdown,
             InitializeDropdown)
         UIDropDownMenu_SetSelectedValue(
             dropdown, selectedIndex)
@@ -415,7 +683,7 @@ local function CreateConfigFrame(
             :SetText(btn.name)
         renameBox:SetText(btn.name)
         local activeMacro = string.gsub(
-            btn.macro or "Macro", "\031", " ")
+            btn.macro or "Macro", "\\031", " ")
         macroInputBox:SetText(activeMacro)
         refreshCallback()
     end
@@ -428,257 +696,38 @@ local function CreateConfigFrame(
         a.macro, b.macro = b.macro, a.macro
     end
 
-    upBtn:SetScript("OnClick", function()
-        if InCombatLockdown() then return end
-        local pDB = MC.db.profile
-        
-        if selectedIndex == 1 then
-            statusText:SetText("|cFFFF0000"
-                .. "First button cannot"
-                .. " be moved|r")
-            return
-        end
-        
-        if selectedIndex == 2 then
-            SwapButtonContents(1, 2)
-            RefreshSelectionEditor()
-            return
-        end
-        
-        local temp = pDB.buttons[selectedIndex]
-        pDB.buttons[selectedIndex] = 
-            pDB.buttons[selectedIndex - 1]
-        pDB.buttons[selectedIndex - 1] = temp
-        
-        selectedIndex = selectedIndex - 1
-        RefreshSelectionEditor()
-    end)
---end of MacroCommander.lua (Box 10 of 14)
---start of MacroCommander.lua (Box 11 of 14)
--- ==========================================
--- Configure dialog template queries to secure
--- validation verification indicators.
--- ==========================================
-
-    downBtn:SetScript("OnClick", function()
-        if InCombatLockdown() then return end
-        local pDB = MC.db.profile
-        
-        if selectedIndex == 1 then
-            if #pDB.buttons < 2 then
-                statusText:SetText("|cFFFF7F00"
-                    .. "Already at bottom|r")
-                return
-            end
-            SwapButtonContents(1, 2)
-            RefreshSelectionEditor()
-            return
-        end
-        
-        if selectedIndex == #pDB.buttons then
-            statusText:SetText("|cFFFF7F00"
-                .. "Already at bottom|r")
-            return
-        end
-        
-        local temp = pDB.buttons[selectedIndex]
-        pDB.buttons[selectedIndex] = 
-            pDB.buttons[selectedIndex + 1]
-        pDB.buttons[selectedIndex + 1] = temp
-        
-        selectedIndex = selectedIndex + 1
-        RefreshSelectionEditor()
-    end)
---end of MacroCommander.lua (Box 11 of 14)
---start of MacroCommander.lua (Box 12 of 14)
--- ==========================================
--- Draw scaling slider parameters and slider
--- tracking mechanics labels.
--- ==========================================
-
-    StaticPopupDialogs[
-        "MC_CONFIRM_DELETE"] = {
-        text = "Are you sure you want to "
-            .. "delete this command button "
-            .. "selection reference template"
-            .. " configuration?",
-        button1 = "Yes", button2 = "No",
-        OnAccept = function()
-            if InCombatLockdown() then 
-                return 
-            end
-            local pDB = MC.db.profile
-            table.remove(pDB.buttons, 
-                selectedIndex)
-            selectedIndex = 1
-            UIDropDownMenu_Initialize(
-                dropdown, 
-                InitializeDropdown)
-            UIDropDownMenu_SetSelectedValue(
-                dropdown, 1)
-            _G[dropdown:GetName() .. "Text"]
-                :SetText(pDB.buttons and 
-                pDB.buttons[selectedIndex]
-                .name or "Default")
-            if pDB.buttons and 
-                pDB.buttons[
-                selectedIndex] then
-                renameBox:SetText(
-                    pDB.buttons[
-                    selectedIndex].name 
-                    or "Default")
-                local activeMacro = 
-                    string.gsub(pDB.buttons[
-                    selectedIndex].macro 
-                    or "Macro", "\031", " ")
-                macroInputBox:SetText(
-                    activeMacro)
-            end
-            refreshCallback()
-        end,
-        timeout = 0, whileDead = true, 
-        hideOnEscape = true,
-    }
---end of MacroCommander.lua (Box 12 of 14)
---start of MacroCommander.lua (Box 13 of 14)
--- ==========================================
--- Configure custom profile management dropdown
--- elements to copy or clear setups.
--- ==========================================
-
-    remBtn:SetScript("OnClick", function()
-        if selectedIndex == 1 then
-            print("|cFFFF0000MC: First "
-                .. "button cannot be deleted,"
-                .. " only have it's values"
-                .. " changed.|r")
-            return
-        end
-        StaticPopup_Show(
-            "MC_CONFIRM_DELETE")
-    end)
-
-    local hSlider = CreateFrame("Slider", 
-        "MC_HeightSlider", cfg, 
-        "OptionsSliderTemplate")
-    hSlider:SetPoint("TOPLEFT", addBtn, 
-        "BOTTOMLEFT", 0, -22)
-    hSlider:SetMinMaxValues(10, 50)
-    hSlider:SetValueStep(1)
-    hSlider:SetValue(db.buttonHeight)
-    _G[hSlider:GetName() .. "Text"]
-        :SetText("Button Height: " 
-        .. db.buttonHeight)
-    _G[hSlider:GetName() .. "Low"]
-        :SetText("10")
-    _G[hSlider:GetName() .. "High"]
-        :SetText("50")
-    hSlider:SetScript("OnValueChanged", 
-        function(self, value)
-        MC.db.profile.buttonHeight = value
-        _G[self:GetName() .. "Text"]
-            :SetText("Button Height: " 
-            .. value)
-        refreshCallback()
-        if UpdateUnsavedStatus then
-            UpdateUnsavedStatus()
-        end
-    end)
-
-    local aSlider = CreateFrame("Slider", 
-        "MC_AlphaSlider", cfg, 
-        "OptionsSliderTemplate")
-    aSlider:SetPoint("TOPLEFT", hSlider, 
-        "BOTTOMLEFT", 0, -25)
-    aSlider:SetMinMaxValues(0.1, 1.0)
-    aSlider:SetValueStep(0.05)
-    aSlider:SetValue(db.alpha or 1.0)
-    _G[aSlider:GetName() .. "Text"]
-        :SetText("Bar Opacity: " 
-        .. string.format("%.2f", db.alpha or 1.0))
-    _G[aSlider:GetName() .. "Low"]
-        :SetText("0.1")
-    _G[aSlider:GetName() .. "High"]
-        :SetText("1.0")
-    aSlider:SetScript("OnValueChanged", 
-        function(self, value)
-        MC.db.profile.alpha = value
-        _G[self:GetName() .. "Text"]
-            :SetText("Bar Opacity: " 
-            .. string.format("%.2f", value))
-        refreshCallback()
-        if UpdateUnsavedStatus then
-            UpdateUnsavedStatus()
-        end
-    end)
-
-    local scaleLabel = cfg
-        :CreateFontString(nil, "OVERLAY", 
-        "GameFontNormalSmall")
-    scaleLabel:SetPoint("TOPLEFT", aSlider, 
-        "BOTTOMLEFT", 0, -20)
-    scaleLabel:SetText("Button Window Scale %"
-        .. " (25 - 100):")
-
-    local scaleBox = CreateFrame("EditBox", 
-        "MC_ScaleFieldBox", cfg, 
-        "InputBoxTemplate")
-    scaleBox:SetSize(45, 20)
-    scaleBox:SetPoint("LEFT", scaleLabel, 
-        "RIGHT", 10, 0)
-    scaleBox:SetMaxLetters(3)
-    scaleBox:SetNumeric(true)
-    scaleBox:SetAutoFocus(false)
-    scaleBox:SetText(tostring(math.floor(
-        (db.scale or 1.0) * 100)))
-    scaleBox:SetScript("OnEnterPressed", 
-        function(self) self:ClearFocus() 
-    end)
-
-    local lockCheck = CreateFrame(
-        "CheckButton", "MC_LockCheck", cfg, 
-        "UICheckButtonTemplate")
-    lockCheck:SetPoint("TOPLEFT", 
-        scaleLabel, "BOTTOMLEFT", -4, -12)
-    lockCheck:SetChecked(db.locked)
-    lockCheck:SetScript("OnClick", 
-        function(self)
-        MC.db.profile.locked = self:GetChecked()
-        if UpdateUnsavedStatus then
-            UpdateUnsavedStatus()
-        end
-    end)
-
-    CaptureCommitted = function()
+    -- Define CaptureCommitted
+    local function CaptureCommitted()
         local pDB = MC.db.profile
         committed.height = math.floor(
             (pDB.buttonHeight or 25) + 0.5)
         committed.alpha = tonumber(
-            string.format("%.2f", 
+            string.format("%.2f",
             pDB.alpha or 1.0))
         committed.scale = math.floor(
             (pDB.scale or 1.0) * 100)
-        committed.locked = 
+        committed.locked =
             pDB.locked and true or false
+        committed.maxColumns = pDB.maxColumns or 10
     end
 
-    UpdateUnsavedStatus = function()
-        if not statusText then return end
+    -- Define UpdateUnsavedStatus (now all elements exist)
+    local function UpdateUnsavedStatus()
         local pDB = MC.db.profile
-        local btn = pDB.buttons and 
+        local btn = pDB.buttons and
             pDB.buttons[selectedIndex]
         local dirty = false
         if btn then
-            local nameNow = renameBox:GetText() 
+            local nameNow = renameBox:GetText()
                 or ""
             if nameNow ~= (btn.name or "") then
                 dirty = true
             end
-            local macroNow = 
+            local macroNow =
                 macroInputBox:GetText() or ""
             local savedMacro = string.gsub(
-                btn.macro or "Macro", 
-                "\031", " ")
+                btn.macro or "Macro",
+                "\\031", " ")
             if macroNow ~= savedMacro then
                 dirty = true
             end
@@ -694,91 +743,169 @@ local function CreateConfigFrame(
             dirty = true
         end
         local alphaNow = tonumber(
-            string.format("%.2f", 
+            string.format("%.2f",
             aSlider:GetValue() or 1.0))
         if alphaNow ~= committed.alpha then
             dirty = true
         end
-        local lockNow = lockCheck:GetChecked() 
+        local lockNow = lockCheck:GetChecked()
             and true or false
         if lockNow ~= committed.locked then
+            dirty = true
+        end
+        local maxColsNow = tonumber(maxColumnsBox:GetText() or "10") or 10
+        if maxColsNow ~= committed.maxColumns then
             dirty = true
         end
         if dirty then
             statusText:SetText("|cFFFF7F00"
                 .. "Unsaved changes detected|r")
         else
-            local cur = statusText:GetText() 
+            local cur = statusText:GetText()
                 or ""
-            if string.find(cur, 
+            if string.find(cur,
                 "Unsaved changes detected") then
                 statusText:SetText("")
             end
         end
     end
-    CaptureCommitted()
-    renameBox:SetScript("OnTextChanged", 
-        UpdateUnsavedStatus)
-    macroInputBox:SetScript("OnTextChanged", 
-        UpdateUnsavedStatus)
-    scaleBox:SetScript("OnTextChanged", 
-        UpdateUnsavedStatus)
 
-    local lockText = _G[lockCheck:GetName() 
-        .. "Text"]
-    lockText:SetDrawLayer("OVERLAY")
-    lockText:SetText(
-        "Lock Main Window Position")
+    -- Assign all scripts after all elements and functions are defined
+    UIDropDownMenu_Initialize(dropdown,
+        InitializeDropdown)
+    UIDropDownMenu_SetSelectedValue(
+        dropdown, 1)
+    _G[dropdown:GetName() .. "Text"]
+        :SetText(db.buttons and
+        db.buttons[selectedIndex].name
+        or "Default")
+    renameBox:SetText(db.buttons and
+        db.buttons[selectedIndex].name
+        or "Default")
 
-    local pLabel = cfg:CreateFontString(
-        nil, "OVERLAY", "GameFontNormalSmall")
-    pLabel:SetPoint("TOPLEFT", lockCheck, 
-        "BOTTOMLEFT", 4, -14)
-    pLabel:SetText("Profile Management")
+    local initialMacro = string.gsub(
+        db.buttons and db.buttons[
+        selectedIndex].macro or "Macro",
+        "\\031", " ")
+    macroInputBox:SetText(initialMacro)
 
-    local selectedProf = "Default"
-    local pDropdown = CreateFrame("Frame", 
-        "MC_ProfileDropdown", cfg, 
-        "UIDropDownMenuTemplate")
-    pDropdown:SetPoint("TOPLEFT", lockCheck, 
-        "BOTTOMLEFT", -12, -26)
-    UIDropDownMenu_SetWidth(pDropdown, 120)
-
-    local function ProfDropdown_OnClick(self)
-        selectedProf = self.value
+    addBtn:SetScript("OnClick", function()
+        if InCombatLockdown() then return end
+        local pDB = MC.db.profile
+        local nextID = #pDB.buttons + 1
+        table.insert(pDB.buttons,
+            { name = "unnamed",
+              macro = "Macro" })
+        selectedIndex = nextID
+        UIDropDownMenu_Initialize(dropdown,
+            InitializeDropdown)
         UIDropDownMenu_SetSelectedValue(
-            pDropdown, selectedProf)
-        _G[pDropdown:GetName() .. "Text"]
-            :SetText(selectedProf)
-    end
+            dropdown, selectedIndex)
+        _G[dropdown:GetName() .. "Text"]
+            :SetText("unnamed")
+        renameBox:SetText("unnamed")
+        macroInputBox:SetText("Macro")
+        refreshCallback()
+    end)
 
-    local function InitProfDropdown()
-        local info = 
-            UIDropDownMenu_CreateInfo()
-        local profiles = MC.db:GetProfiles()
-        local activeProfile = MC.db:GetCurrentProfile()
-        
-        info.text = "Addon Factory Default"
-        info.value = "Addon Factory Default"
-        info.func = ProfDropdown_OnClick
-        info.checked = (selectedProf == "Addon Factory Default")
-        UIDropDownMenu_AddButton(info)
-        
-        for _, pName in ipairs(profiles) do
-            info.text = pName
-            info.value = pName
-            info.func = ProfDropdown_OnClick
-            info.checked = (pName == activeProfile)
-            UIDropDownMenu_AddButton(info)
+    remBtn:SetScript("OnClick", function()
+        local pDB = MC.db.profile
+        if selectedIndex == 1 and #pDB.buttons == 1 then
+            print("|cFFFF0000MC: Cannot delete the last remaining button; its values can be changed.|r")
+            return
         end
-    end
+        StaticPopup_Show(
+            "MC_CONFIRM_DELETE")
+    end)
 
-    local loadPBtn = CreateFrame("Button", 
-        nil, cfg, "UIPanelButtonTemplate")
-    loadPBtn:SetSize(45, 20)
-    loadPBtn:SetPoint("LEFT", pDropdown, 
-        "RIGHT", -10, 3)
-    loadPBtn:SetText("Load")
+    upBtn:SetScript("OnClick", function()
+        if InCombatLockdown() then return end
+        local pDB = MC.db.profile
+
+        if selectedIndex == 1 then
+            statusText:SetText("|cFFFF0000"
+                .. "First button cannot"
+                .. " be moved|r")
+            return
+        end
+
+        if selectedIndex == 2 then
+            SwapButtonContents(1, 2)
+            selectedIndex = 1 -- Fix: Update selectedIndex after swap
+            RefreshSelectionEditor()
+            return
+        end
+
+        local temp = pDB.buttons[selectedIndex]
+        pDB.buttons[selectedIndex] =
+            pDB.buttons[selectedIndex - 1]
+        pDB.buttons[selectedIndex - 1] = temp
+
+        selectedIndex = selectedIndex - 1
+        RefreshSelectionEditor()
+    end)
+
+    downBtn:SetScript("OnClick", function()
+        if InCombatLockdown() then return end
+        local pDB = MC.db.profile
+
+        if selectedIndex == 1 then
+            if #pDB.buttons < 2 then
+                statusText:SetText("|cFFFF7F00"
+                    .. "Already at bottom|r")
+                return
+            end
+            SwapButtonContents(1, 2)
+            selectedIndex = 2 -- Fix: Update selectedIndex after swap
+            RefreshSelectionEditor()
+            return
+        end
+
+        if selectedIndex == #pDB.buttons then
+            statusText:SetText("|cFFFF7F00"
+                .. "Already at bottom|r")
+            return
+        end
+
+        local temp = pDB.buttons[selectedIndex]
+        pDB.buttons[selectedIndex] =
+            pDB.buttons[selectedIndex + 1]
+        pDB.buttons[selectedIndex + 1] = temp
+
+        selectedIndex = selectedIndex + 1
+        RefreshSelectionEditor()
+    end)
+
+    hSlider:SetScript("OnValueChanged",
+        function(self, value)
+        MC.db.profile.buttonHeight = value
+        _G[self:GetName() .. "Text"]
+            :SetText("Button Height: "
+            .. value)
+        refreshCallback()
+        UpdateUnsavedStatus()
+    end)
+
+    aSlider:SetScript("OnValueChanged",
+        function(self, value)
+        MC.db.profile.alpha = value
+        _G[self:GetName() .. "Text"]
+            :SetText("Bar Opacity: "
+            .. string.format("%.2f", value))
+        refreshCallback()
+        UpdateUnsavedStatus()
+    end)
+
+    lockCheck:SetScript("OnClick",
+        function(self)
+        MC.db.profile.locked = self:GetChecked()
+        UpdateUnsavedStatus()
+    end)
+
+    UIDropDownMenu_Initialize(pDropdown, InitProfDropdown)
+    UIDropDownMenu_SetSelectedValue(pDropdown, selectedProf)
+    _G[pDropdown:GetName() .. "Text"]:SetText(selectedProf)
+
     loadPBtn:SetScript("OnClick", function()
         if InCombatLockdown() then return end
         if selectedProf == "Addon Factory Default" then
@@ -794,19 +921,6 @@ local function CreateConfigFrame(
         end
         ReloadUI()
     end)
---end of MacroCommander.lua (Box 13 of 14)
---start of MacroCommander.lua (Box 14 of 14)
--- ==========================================
--- Apply interface dimensions and trigger main UI
--- engine updates cleanly.
--- ==========================================
-
-    local delPBtn = CreateFrame("Button", 
-        nil, cfg, "UIPanelButtonTemplate")
-    delPBtn:SetSize(45, 20)
-    delPBtn:SetPoint("LEFT", loadPBtn, 
-        "RIGHT", 4, 0)
-    delPBtn:SetText("Del")
 
     delPBtn:SetScript("OnClick", function()
         if InCombatLockdown() then return end
@@ -826,54 +940,40 @@ local function CreateConfigFrame(
         _G[pDropdown:GetName() .. "Text"]:SetText(selectedProf)
     end)
 
-    cfg:SetScript("OnShow", function()
-        local activeProfName = MC.db:GetCurrentProfile()
-        selectedProf = activeProfName
-        UIDropDownMenu_Initialize(pDropdown, InitProfDropdown)
-        UIDropDownMenu_SetSelectedValue(pDropdown, selectedProf)
-        _G[pDropdown:GetName() .. "Text"]:SetText(activeProfName)
-        UpdateUnsavedStatus()
-    end)
+    renameBox:SetScript("OnTextChanged", UpdateUnsavedStatus)
+    macroInputBox:SetScript("OnTextChanged", UpdateUnsavedStatus)
+    scaleBox:SetScript("OnTextChanged", UpdateUnsavedStatus)
+    maxColumnsBox:SetScript("OnTextChanged", UpdateUnsavedStatus)
 
-    statusText = cfg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    statusText:SetPoint("BOTTOM", cfg, "BOTTOM", 0, 45)
-    statusText:SetText("")
 
-    local creditText = cfg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    creditText:SetPoint("TOPRIGHT", cfg, "BOTTOMRIGHT", -12, 16)
-    creditText:SetText("Co-Developed with GoogleAI")
-    creditText:SetTextColor(0.45, 0.45, 0.45, 0.6)
-
-    local saveBtn = CreateFrame("Button", nil, cfg, "UIPanelButtonTemplate")
-    saveBtn:SetSize(95, 22)
-    saveBtn:SetPoint("BOTTOMLEFT", cfg, "BOTTOM", -105, 16)
-    saveBtn:SetText("Save Changes")
     saveBtn:SetScript("OnClick", function()
         local pDB = MC.db.profile
         local rawMacro = macroInputBox:GetText() or "Macro"
         if rawMacro == "" or rawMacro == " " then rawMacro = "Macro" end
-        local targetMacro = string.gsub(rawMacro, " ", "\031")
-        local searchToken = string.lower(rawMacro)
-        local genCounts, charCounts = 0, 0
-        for i = 1, 36 do
-            local mName = GetMacroInfo(i)
-            if mName and string.lower(mName) == searchToken then genCounts = genCounts + 1 end
-        end
-        for i = 37, 54 do
-            local mName = GetMacroInfo(i)
-            if mName and string.lower(mName) == searchToken then charCounts = charCounts + 1 end
-        end
-        if genCounts > 1 or charCounts > 1 then
-            statusText:SetText("|cFFFF7F00Duplicate macro name detected|r")
-            local t = 0
-            cfg:SetScript("OnUpdate", function(self, elapsed)
-                t = t + elapsed
-                if t > 3 then
-                    self:SetScript("OnUpdate", nil)
-                    UpdateUnsavedStatus()
-                end
-            end)
-            return
+        local targetMacro = string.gsub(rawMacro, " ", "\\031")
+        if not IsDirectChatCommand(rawMacro) then
+            local searchToken = string.lower(rawMacro)
+            local genCounts, charCounts = 0, 0
+            for i = 1, 36 do
+                local mName = GetMacroInfo(i)
+                if mName and string.lower(mName) == searchToken then genCounts = genCounts + 1 end
+            end
+            for i = 37, 54 do
+                local mName = GetMacroInfo(i)
+                if mName and string.lower(mName) == searchToken then charCounts = charCounts + 1 end
+            end
+            if genCounts > 1 or charCounts > 1 then
+                statusText:SetText("|cFFFF7F00Duplicate macro name detected|r")
+                local t = 0
+                cfg:SetScript("OnUpdate", function(self, elapsed)
+                    t = t + elapsed
+                    if t > 3 then
+                        self:SetScript("OnUpdate", nil)
+                        UpdateUnsavedStatus()
+                    end
+                end)
+                return
+            end
         end
         local currentText = renameBox:GetText()
         if currentText and currentText ~= "" and currentText ~= " " then
@@ -893,8 +993,41 @@ local function CreateConfigFrame(
             (hSlider:GetValue() or 25) + 0.5)
         pDB.alpha = tonumber(string.format(
             "%.2f", aSlider:GetValue() or 1.0))
-        pDB.locked = lockCheck:GetChecked() 
+        pDB.locked = lockCheck:GetChecked()
             and true or false
+
+        local targetMaxCols = tonumber(maxColumnsBox:GetText() or "10") or 10
+        if targetMaxCols < 1 then
+            statusText:SetText(L["MC: Buttons per column must be a number greater than or equal to 1."])
+            maxColumnsBox:SetText("1")
+            targetMaxCols = 1
+            local t = 0
+            cfg:SetScript("OnUpdate", function(self, elapsed)
+                t = t + elapsed
+                if t > 3 then
+                    self:SetScript("OnUpdate", nil)
+                    UpdateUnsavedStatus()
+                end
+            end)
+            return
+        end
+        if targetMaxCols > 50 then
+            statusText:SetText(L["MC: Buttons per column cannot exceed 50."])
+            maxColumnsBox:SetText("50")
+            targetMaxCols = 50
+            local t = 0
+            cfg:SetScript("OnUpdate", function(self, elapsed)
+                t = t + elapsed
+                if t > 3 then
+                    self:SetScript("OnUpdate", nil)
+                    UpdateUnsavedStatus()
+                end
+            end)
+            return
+        end
+        pDB.maxColumns = targetMaxCols
+        maxColumnsBox:SetText(tostring(targetMaxCols))
+
         CaptureCommitted()
         UIDropDownMenu_Initialize(dropdown, InitializeDropdown)
         _G[dropdown:GetName() .. "Text"]:SetText(pDB.buttons[selectedIndex].name)
@@ -912,11 +1045,21 @@ local function CreateConfigFrame(
         end
     end)
 
-    local closeBtn = CreateFrame("Button", nil, cfg, "UIPanelButtonTemplate")
-    closeBtn:SetSize(95, 22)
-    closeBtn:SetPoint("BOTTOMLEFT", cfg, "BOTTOM", 10, 16)
-    closeBtn:SetText("Close")
-    closeBtn:SetScript("OnClick", function() statusText:SetText(""); cfg:Hide() end)
+    cfg:SetScript("OnShow", function()
+        local activeProfName = MC.db:GetCurrentProfile()
+        selectedProf = activeProfName
+        UIDropDownMenu_Initialize(pDropdown, InitProfDropdown)
+        UIDropDownMenu_SetSelectedValue(pDropdown, selectedProf)
+        _G[pDropdown:GetName() .. "Text"]:SetText(activeProfName)
+        CaptureCommitted() -- Capture committed state when config frame is shown
+        UpdateUnsavedStatus()
+    end)
+
+    local creditText = cfg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    creditText:SetPoint("TOPRIGHT", cfg, "BOTTOMRIGHT", -12, 20)
+    creditText:SetText("Co-Developed with CursorAI/GoogleAI")
+    creditText:SetTextColor(0.45, 0.45, 0.45, 0.6)
+
     return cfg
 end
 
@@ -950,15 +1093,16 @@ function MC:OnInitialize()
     local charName = UnitName("player")
     local realmName = GetRealmName()
     self.db = LibStub("AceDB-3.0"):New("MacroCommanderDB", GetDefaultDB(), charName .. " - " .. realmName)
-    local profileOptions = LibStub("AceDBOptions-3.0"):GetOptionsTable(self.db)
-    local db_options_reg_key = "MacroCommanderProfiles"
-    LibStub("AceConfigRegistry-3.0"):RegisterOptionsTable(db_options_reg_key, profileOptions)
-    LibStub("AceConfigDialog-3.0"):AddToBlizOptions(db_options_reg_key, "Profiles", "Macro Commander")
     InitMainFrame()
     ConfigFrame = CreateConfigFrame(function() MC:RefreshUI() end)
     self.db.RegisterCallback(self, "OnProfileChanged", "RefreshUI")
     self.db.RegisterCallback(self, "OnProfileCopied", "RefreshUI")
     self.db.RegisterCallback(self, "OnProfileReset", "RefreshUI")
+    pcall(function()
+        local profileOptions = LibStub("AceDBOptions-3.0"):GetOptionsTable(self.db)
+        LibStub("AceConfigRegistry-3.0"):RegisterOptionsTable("MacroCommanderProfiles", profileOptions)
+        LibStub("AceConfigDialog-3.0"):AddToBlizOptions("MacroCommanderProfiles", "Profiles", "Macro Commander")
+    end)
     print("|cFFFFFFFFMacro Commander is now loaded - use |cFF1A9FCF/macroc help|cFFFFFFFF for commands|r")
 end
 
@@ -972,16 +1116,21 @@ local function PrintMCHelp()
     print("|cFF1A9FCF/macroc on/off|r - show/hides main window")
     print("|cFF1A9FCF/macroc toggle|r - toggles main window")
     print("|cFF1A9FCF/macroc resetpos|r - resets windows to center of screen")
+
 end
 
 SLASH_MACROC1 = "/macroc"
 SlashCmdList["MACROC"] = function(msg)
+    if not MC or not MC.db or not MainFrame or not ConfigFrame then
+        print("|cFFFF0000MC: Addon did not finish loading. Check for Lua errors.|r")
+        return
+    end
     local db = MC.db.profile
     local cmd = string.gsub(msg or "", "%s+", "")
     cmd = string.lower(cmd)
     if cmd == "resetpos" then ResetWindowPositions()
     elseif cmd == "help" then PrintMCHelp()
-    elseif cmd == "toggle" or cmd == "on" or cmd == "off" then 
+    elseif cmd == "toggle" or cmd == "on" or cmd == "off" then
         if cmd == "on" then MainFrame:Show(); db.visible = true
         elseif cmd == "off" then MainFrame:Hide(); db.visible = false
         else
@@ -990,9 +1139,8 @@ SlashCmdList["MACROC"] = function(msg)
         end
     else
         if cmd == "" then
-            if ConfigFrame and ConfigFrame:IsShown() then ConfigFrame:Hide()
-            elseif ConfigFrame then ConfigFrame:Show() end
+            if ConfigFrame:IsShown() then ConfigFrame:Hide()
+            else ConfigFrame:Show() end
         else PrintMCHelp() end
     end
 end
---end of MacroCommander.lua (Box 14 of 14)
